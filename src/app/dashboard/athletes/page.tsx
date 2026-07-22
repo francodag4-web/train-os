@@ -4,12 +4,8 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 
-interface Athlete {
-  id: string
-  full_name: string
-  assignment?: { id: string; program_id: string; programs: { name: string } }
-}
-
+interface Assignment { id: string; program_id: string; programs: { name: string } }
+interface Athlete { id: string; full_name: string; assignments: Assignment[] }
 interface Program { id: string; name: string }
 
 export default function AthletesPage() {
@@ -45,13 +41,15 @@ export default function AthletesPage() {
         .eq('coach_id', user.id)
         .eq('is_active', true)
 
-      const { data: progs } = await supabase.from('programs').select('id, name').eq('coach_id', user.id).eq('is_active', true)
+      const { data: progs } = await supabase.from('programs').select('id, name').order('name')
 
-      setAthletes(profilesData.map(p => ({
-        id: p.id,
-        full_name: p.full_name,
-        assignment: assignments?.find((a: any) => a.athlete_id === p.id)
-      })))
+      const byAthlete = new Map<string, Assignment[]>()
+      assignments?.forEach((a: any) => {
+        if (!byAthlete.has(a.athlete_id)) byAthlete.set(a.athlete_id, [])
+        byAthlete.get(a.athlete_id)!.push(a)
+      })
+
+      setAthletes(profilesData.map(p => ({ id: p.id, full_name: p.full_name, assignments: byAthlete.get(p.id) || [] })))
       setPrograms(progs || [])
       setLoading(false)
     }
@@ -75,7 +73,7 @@ export default function AthletesPage() {
       return
     }
     await supabase.from('coach_athletes').insert({ coach_id: userId, athlete_id: athlete.id })
-    setAthletes(a => [...a, { id: athlete.id, full_name: athlete.full_name }])
+    setAthletes(a => [...a, { id: athlete.id, full_name: athlete.full_name, assignments: [] }])
     setShowAddForm(false)
     setAddEmail('')
     setSearching(false)
@@ -89,16 +87,34 @@ export default function AthletesPage() {
   }
 
   const assignProgram = async (athleteId: string, programId: string) => {
+    const athlete = athletes.find(a => a.id === athleteId)
+    if ((athlete?.assignments?.length || 0) >= 3) {
+      alert('Este atleta ya tiene 3 programas asignados (maximo permitido)')
+      return
+    }
+    if (athlete?.assignments?.find(a => a.program_id === programId)) {
+      alert('Este programa ya esta asignado a este atleta')
+      return
+    }
     const supabase = createClient()
-    await supabase.from('program_assignments').update({ is_active: false }).eq('athlete_id', athleteId).eq('coach_id', userId)
     const { data } = await supabase.from('program_assignments').insert({
       program_id: programId, athlete_id: athleteId, coach_id: userId,
       start_date: new Date().toISOString().split('T')[0]
     }).select('*, programs(name)').single()
     if (data) {
-      setAthletes(a => a.map(athlete => athlete.id === athleteId ? { ...athlete, assignment: data } : athlete))
+      setAthletes(a => a.map(athlete =>
+        athlete.id === athleteId ? { ...athlete, assignments: [...athlete.assignments, data] } : athlete
+      ))
     }
     setAssigningTo(null)
+  }
+
+  const removeAssignment = async (athleteId: string, assignmentId: string) => {
+    const supabase = createClient()
+    await supabase.from('program_assignments').delete().eq('id', assignmentId)
+    setAthletes(a => a.map(athlete =>
+      athlete.id === athleteId ? { ...athlete, assignments: athlete.assignments.filter(x => x.id !== assignmentId) } : athlete
+    ))
   }
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-400">Cargando...</div>
@@ -119,42 +135,56 @@ export default function AthletesPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {athletes.map(athlete => (
-              <div key={athlete.id} className="bg-white rounded-2xl border border-gray-200 p-5">
-                <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mb-2">
-                      <span className="text-blue-600 font-bold text-sm">{(athlete.full_name || 'A')[0].toUpperCase()}</span>
+            {athletes.map(athlete => {
+              const availablePrograms = programs.filter(p => !athlete.assignments.find(a => a.program_id === p.id))
+              const canAssignMore = athlete.assignments.length < 3
+              return (
+                <div key={athlete.id} className="bg-white rounded-2xl border border-gray-200 p-5">
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                        <span className="text-blue-600 font-bold text-sm">{(athlete.full_name || 'A')[0].toUpperCase()}</span>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-gray-900">{athlete.full_name || 'Sin nombre'}</p>
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Atleta</span>
+                      </div>
                     </div>
-                    <p className="font-semibold text-gray-900">{athlete.full_name || 'Sin nombre'}</p>
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Atleta</span>
+                    <button onClick={() => removeAthlete(athlete.id)} className="text-gray-300 hover:text-red-400 text-sm ml-2">x</button>
                   </div>
-                  <button onClick={() => removeAthlete(athlete.id)} className="text-gray-300 hover:text-red-400 text-sm">x</button>
-                </div>
 
-                <div className="border-t border-gray-100 pt-3">
-                  <p className="text-xs text-gray-400 mb-2">Programa asignado</p>
-                  {athlete.assignment ? (
+                  <div className="border-t border-gray-100 pt-3 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-900 truncate flex-1">{(athlete.assignment as any).programs?.name || 'Programa'}</span>
-                      <button onClick={() => setAssigningTo(athlete.id)} className="text-xs text-blue-600 hover:underline ml-2 flex-shrink-0">Cambiar</button>
+                      <p className="text-xs text-gray-400">Programas asignados ({athlete.assignments.length}/3)</p>
+                      {canAssignMore && (
+                        <button onClick={() => setAssigningTo(assigningTo === athlete.id ? null : athlete.id)} className="text-xs text-blue-600 hover:underline">+ Asignar</button>
+                      )}
                     </div>
-                  ) : (
-                    <button onClick={() => setAssigningTo(athlete.id)} className="text-sm text-blue-600 hover:underline">Asignar programa</button>
-                  )}
 
-                  {assigningTo === athlete.id && (
-                    <div className="mt-2 bg-gray-50 rounded-xl p-2 space-y-1">
-                      {programs.length === 0 && <p className="text-xs text-gray-400 px-2 py-1">No tienes programas creados</p>}
-                      {programs.map(prog => (
-                        <button key={prog.id} onClick={() => assignProgram(athlete.id, prog.id)} className="w-full text-left px-3 py-2 text-sm hover:bg-white rounded-lg transition-colors">{prog.name}</button>
-                      ))}
-                      <button onClick={() => setAssigningTo(null)} className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-white rounded-lg border-t border-gray-100 mt-1">Cancelar</button>
-                    </div>
-                  )}
+                    {athlete.assignments.length === 0 && (
+                      <p className="text-sm text-gray-300 italic">Sin programas asignados</p>
+                    )}
+
+                    {athlete.assignments.map(assignment => (
+                      <div key={assignment.id} className="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2">
+                        <p className="text-sm font-medium text-gray-800 truncate flex-1">{assignment.programs?.name}</p>
+                        <button onClick={() => removeAssignment(athlete.id, assignment.id)} className="text-gray-300 hover:text-red-400 text-xs ml-2 flex-shrink-0">Quitar</button>
+                      </div>
+                    ))}
+
+                    {assigningTo === athlete.id && (
+                      <div className="bg-gray-50 rounded-xl p-2 space-y-1 mt-1">
+                        {availablePrograms.length === 0 && <p className="text-xs text-gray-400 px-2 py-1">No hay mas programas disponibles</p>}
+                        {availablePrograms.map(prog => (
+                          <button key={prog.id} onClick={() => assignProgram(athlete.id, prog.id)} className="w-full text-left px-3 py-2 text-sm hover:bg-white rounded-lg transition-colors">{prog.name}</button>
+                        ))}
+                        <button onClick={() => setAssigningTo(null)} className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-white rounded-lg border-t border-gray-100 mt-1">Cancelar</button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </main>
