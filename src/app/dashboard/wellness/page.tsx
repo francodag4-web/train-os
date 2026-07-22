@@ -119,7 +119,7 @@ export default function WellnessPage() {
 
             {/* Metricas individuales */}
             <div className="grid grid-cols-4 gap-2 mb-5">
-              {SLIDERS.filter(s => !s.isHours).p(s => (
+              {SLIDERS.filter(s => !s.isHours).map(s => (
                 <div key={s.key} className={`rounded-xl p-2 text-center ${metricColor((todayLog as any)[s.key], s.invert)}`}>
                   <p className="text-xs opacity-70 mb-0.5 leading-tight">{s.label.split(' ')[0]}</p>
                   <p className="text-lg font-bold">{(todayLog as any)[s.key]}</p>
